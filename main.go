@@ -6,9 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path"
+	"reflect"
 	"strings"
 
 	"github.com/nats-io/nats.go"
@@ -19,8 +20,12 @@ import (
 )
 
 var (
-	errlg  *log.Logger = log.Default()
-	infolg *log.Logger = log.Default()
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+
+	logger = slog.Default()
+	writer io.Writer
 )
 
 func main() {
@@ -30,31 +35,36 @@ func main() {
 		self = path.Base(os.Args[0])
 	}
 
+	fmt.Printf("%s\n\tversion: v%s\n\t commit: %s\n\t  built: %s\n\n", self, version, commit, date)
+
 	cn := &unifi.Connection{
-		AppName:  self,
-		BaseURL:  os.Getenv("UNIFI_ENDPOINT"),
-		Username: os.Getenv("UNIFI_USERNAME"),
-		Password: os.Getenv("UNIFI_PASSWORD"),
+		AppName:    self,
+		AppVersion: version,
+		BaseURL:    os.Getenv("UNIFI_ENDPOINT"),
+		Username:   os.Getenv("UNIFI_USERNAME"),
+		Password:   os.Getenv("UNIFI_PASSWORD"),
 	}
 
 	ctx, cancelFn := context.WithCancel(context.Background())
 
 	nc, err := nats.Connect(os.Getenv("NATS_URL"))
 	if err != nil {
-		errlg.Fatalf("failed to connect to NATS: %v", err)
+		logger.ErrorContext(ctx, "connecting to NATS", "nats url", os.Getenv("NATS_URL"), "msg", err)
+		os.Exit(-1)
 	}
 
-	errlg = lnats.NewStdLogger(&lnats.Logger{Connection: nc, PublishSubject: fmt.Sprintf("log.error.%s", self), LogFlags: log.LstdFlags})
-	infolg = lnats.NewStdLogger(&lnats.Logger{Connection: nc, PublishSubject: fmt.Sprintf("log.info.%s", self), LogFlags: log.LstdFlags})
+	writer = &lnats.Logger{Connection: nc, PublishSubject: fmt.Sprintf("log.%s", self)}
+	logger = slog.New(slog.NewJSONHandler(io.MultiWriter(os.Stderr, writer), nil))
 
 	errch := make(chan error)
 
 	if err := cn.Events(ctx, NewHandler(self, NewPublisher(nc)), errch); err != nil {
-		errlg.Fatalf("failed to listen to events: %v", err)
+		logger.ErrorContext(ctx, "listening to events", "unifi url", os.Getenv("UNIFI_ENDPOINT"), "msg", err)
+		os.Exit(-1)
 	}
 
 	for err := range errch {
-		errlg.Printf("error: %v\n", err)
+		logger.ErrorContext(ctx, "from errch", "msg", err)
 
 		// TODO: handle certain errors, and cancel context as needed
 		if errors.Is(err, io.EOF) {
@@ -90,13 +100,13 @@ func NewHandler(baseSubject string, publisher func(context.Context, string, []by
 
 		meta, ok := m["meta"].(map[string]any)
 		if !ok {
-			infolg.Printf("no meta key: %+v", m)
+			logger.WarnContext(ctx, "no meta key", "from", m)
 			return nil
 		}
 
 		msg, ok := meta["message"].(string)
 		if !ok {
-			infolg.Printf("no message key: %+v", meta)
+			logger.WarnContext(ctx, "no message key", "from", meta)
 			return nil
 		}
 
@@ -107,7 +117,7 @@ func NewHandler(baseSubject string, publisher func(context.Context, string, []by
 		case "device:sync":
 			mac, ok := meta["mac"].(string)
 			if !ok {
-				infolg.Printf("no mac key: %+v", meta)
+				logger.WarnContext(ctx, "no mac key", "from", meta)
 				return nil
 			}
 			subj = fmt.Sprintf("%s.%s", subj, mac)
@@ -116,19 +126,19 @@ func NewHandler(baseSubject string, publisher func(context.Context, string, []by
 		case "unifi-device:sync":
 		case "user:sync":
 		default:
-			errlg.Printf("missing handler for subject %q", msg)
+			logger.WarnContext(ctx, "missing handler", "subject", msg)
 			return nil
 		}
 
 		dt, ok := m["data"]
 		if !ok {
-			infolg.Printf("no data key: %+v", m)
+			logger.WarnContext(ctx, "no data key", "from", m)
 			return nil
 		}
 
 		data, ok := dt.([]interface{})
 		if !ok {
-			infolg.Printf("data unknown type: %T", dt)
+			logger.WarnContext(ctx, "data in unexpected type", "from", dt, "type", reflect.TypeOf(dt))
 			return nil
 		}
 
@@ -141,7 +151,8 @@ func NewHandler(baseSubject string, publisher func(context.Context, string, []by
 			return err
 		}
 
-		infolg.Printf("published %q", subj)
+		logger.DebugContext(ctx, "published", "subject", subj)
+
 		return nil
 	}
 }

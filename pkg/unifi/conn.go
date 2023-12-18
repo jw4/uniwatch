@@ -180,7 +180,7 @@ func (c *Connection) login(ctx context.Context) error {
 
 		defer res.Body.Close()
 
-		return fmt.Errorf("failed to login (%s): %w", string(d), err)
+		return fmt.Errorf("failed to login (%s)", string(d))
 	}
 
 	return nil
