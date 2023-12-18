@@ -115,6 +115,8 @@ func NewHandler(baseSubject string, publisher func(context.Context, string, []by
 		switch msg {
 		case "client:sync":
 		case "device:sync":
+			fallthrough
+		case "device:update":
 			mac, ok := meta["mac"].(string)
 			if !ok {
 				logger.WarnContext(ctx, "no mac key", "from", meta)
