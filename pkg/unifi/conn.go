@@ -3,8 +3,10 @@ package unifi
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -14,12 +16,16 @@ import (
 )
 
 type Connection struct {
-	BaseURL  string
-	Username string
-	Password string
+	BaseURL    string
+	Username   string
+	Password   string
+	AppName    string
+	AppVersion string
 
 	client *http.Client
 	agent  string
+
+	eventsWS *websocket.Conn
 }
 
 func UserAgent(userAgent string) func(*Connection) {
@@ -28,83 +34,61 @@ func UserAgent(userAgent string) func(*Connection) {
 	}
 }
 
-func NewConnection(baseURL, username, password string, opts ...func(*Connection)) *Connection {
-	conn := &Connection{
-		BaseURL:  baseURL,
-		Username: username,
-		Password: password,
+func HTTPClient(cl *http.Client) func(*Connection) {
+	return func(c *Connection) {
+		c.client = cl
 	}
-
-	for _, opt := range opts {
-		opt(conn)
-	}
-
-	return conn
 }
 
-func (c *Connection) Events(ctx context.Context, handler func(websocket.MessageType, io.Reader) error, errch chan<- error) error {
-	if err := c.checkLogin(ctx); err != nil {
+func (c *Connection) Apply(opts ...func(*Connection)) {
+	for _, opt := range opts {
+		opt(c)
+	}
+}
+
+func (c *Connection) Events(ctx context.Context, handler func(context.Context, websocket.MessageType, io.Reader) error, errch chan<- error) error {
+	if err := c.openEventsWS(ctx); err != nil {
 		return err
 	}
 
-	u, err := url.Parse(c.BaseURL)
-	if err != nil {
-		return fmt.Errorf("unable to parse base url %q: %w", c.BaseURL, err)
-	}
-
-	q := u.Query()
-	q.Set("clients", "v2")
-	q.Set("critical_notifications", "true")
-	u.RawQuery = q.Encode()
-
-	u.Scheme = "wss"
-	u.Path = "/proxy/network/wss/s/default/events"
-
-	ws, resp, err := websocket.Dial(ctx, u.String(), &websocket.DialOptions{HTTPClient: c.client})
-	if err != nil {
-		return fmt.Errorf("dialing websocket %s: %w", u, err)
-	}
-
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		defer ws.CloseNow()
-
-		d, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("reading response body on failed websocket dial (status: %d %s): %w", resp.StatusCode, resp.Status, err)
-		}
-
-		defer resp.Body.Close()
-
-		return fmt.Errorf("unexpected status (%d %s): %s", resp.StatusCode, resp.Status, string(d))
-	}
-
-	ws.SetReadLimit(-1)
-
-	go func(ctx context.Context, ws *websocket.Conn, errch chan<- error) {
-		defer ws.CloseNow()
+	go func(ctx context.Context, c *Connection, errch chan<- error) {
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			default:
-				t, rdr, err := ws.Reader(ctx)
+				t, rdr, err := c.eventsWS.Reader(ctx)
 				if err != nil {
 					errch <- err
+					if errors.Is(err, net.ErrClosed) {
+						if err := c.openEventsWS(ctx); err != nil {
+							errch <- err
+							return
+						}
+					}
 					continue
 				}
 
-				if err = handler(t, rdr); err != nil {
+				if err = handler(ctx, t, rdr); err != nil {
 					errch <- err
 					continue
 				}
 			}
 		}
-	}(ctx, ws, errch)
+	}(ctx, c, errch)
 
 	return nil
 }
 
 func (c *Connection) init() error {
+	if c.AppName == "" {
+		c.AppName = "uniwatch"
+	}
+
+	if c.AppVersion == "" {
+		c.AppVersion = "v0.0.1-dev"
+	}
+
 	if c.BaseURL == "" {
 		c.BaseURL = "https://127.0.0.1:6443"
 	}
@@ -112,7 +96,7 @@ func (c *Connection) init() error {
 	if c.client == nil {
 		jar, err := cookiejar.New(nil)
 		if err != nil {
-			return err
+			return fmt.Errorf("creating new cookiejar: %w", err)
 		}
 
 		c.client = &http.Client{
@@ -122,7 +106,7 @@ func (c *Connection) init() error {
 	}
 
 	if c.agent == "" {
-		c.agent = "uniwatch dev"
+		c.agent = fmt.Sprintf("%s %s", c.AppName, c.AppVersion)
 	}
 
 	return nil
@@ -198,6 +182,58 @@ func (c *Connection) login(ctx context.Context) error {
 
 		return fmt.Errorf("failed to login (%s): %w", string(d), err)
 	}
+
+	return nil
+}
+
+func (c *Connection) openEventsWS(ctx context.Context) error {
+	if c.eventsWS != nil {
+		if err := c.eventsWS.Ping(ctx); err == nil {
+			return nil
+		}
+
+		c.eventsWS.CloseNow()
+		c.eventsWS = nil
+	}
+
+	if err := c.checkLogin(ctx); err != nil {
+		return err
+	}
+
+	u, err := url.Parse(c.BaseURL)
+	if err != nil {
+		return fmt.Errorf("unable to parse base url %q: %w", c.BaseURL, err)
+	}
+
+	q := u.Query()
+	q.Set("clients", "v2")
+	q.Set("critical_notifications", "true")
+	u.RawQuery = q.Encode()
+
+	u.Scheme = "wss"
+	u.Path = "/proxy/network/wss/s/default/events"
+
+	ws, resp, err := websocket.Dial(ctx, u.String(), &websocket.DialOptions{HTTPClient: c.client})
+	if err != nil {
+		return fmt.Errorf("dialing websocket %s: %w", u, err)
+	}
+
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		defer ws.CloseNow()
+
+		d, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("reading response body on failed websocket dial (status: %d %s): %w", resp.StatusCode, resp.Status, err)
+		}
+
+		defer resp.Body.Close()
+
+		return fmt.Errorf("unexpected status (%d %s): %s", resp.StatusCode, resp.Status, string(d))
+	}
+
+	ws.SetReadLimit(-1)
+
+	c.eventsWS = ws
 
 	return nil
 }
