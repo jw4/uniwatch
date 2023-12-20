@@ -16,11 +16,12 @@ import (
 )
 
 type Connection struct {
-	BaseURL    string
-	Username   string
-	Password   string
 	AppName    string
 	AppVersion string
+	BaseURL    string
+	Site       string
+	Username   string
+	Password   string
 
 	client *http.Client
 	agent  string
@@ -80,6 +81,26 @@ func (c *Connection) Events(ctx context.Context, handler func(context.Context, w
 	return nil
 }
 
+func (c *Connection) AllClients(ctx context.Context) (string, error) {
+	d, err := c.apiGet(ctx, "/rest/user")
+	return string(d), err
+}
+
+func (c *Connection) ActiveClients(ctx context.Context) (string, error) {
+	d, err := c.apiGet(ctx, "/stat/sta")
+	return string(d), err
+}
+
+func (c *Connection) ActiveDevices(ctx context.Context) (string, error) {
+	d, err := c.apiGet(ctx, "/stat/device")
+	return string(d), err
+}
+
+func (c *Connection) LatestEvents(ctx context.Context) (string, error) {
+	d, err := c.apiGet(ctx, "/stat/event")
+	return string(d), err
+}
+
 func (c *Connection) init() error {
 	if c.AppName == "" {
 		c.AppName = "uniwatch"
@@ -91,6 +112,10 @@ func (c *Connection) init() error {
 
 	if c.BaseURL == "" {
 		c.BaseURL = "https://127.0.0.1:6443"
+	}
+
+	if c.Site == "" {
+		c.Site = "default"
 	}
 
 	if c.client == nil {
@@ -200,18 +225,17 @@ func (c *Connection) openEventsWS(ctx context.Context) error {
 		return err
 	}
 
-	u, err := url.Parse(c.BaseURL)
+	u, err := c.buildURL(
+		"/wss/s/default/events",
+		map[string]string{
+			"clients":                "v2",
+			"critical_notifications": "true",
+		})
 	if err != nil {
-		return fmt.Errorf("unable to parse base url %q: %w", c.BaseURL, err)
+		return err
 	}
 
-	q := u.Query()
-	q.Set("clients", "v2")
-	q.Set("critical_notifications", "true")
-	u.RawQuery = q.Encode()
-
 	u.Scheme = "wss"
-	u.Path = "/proxy/network/wss/s/default/events"
 
 	ws, resp, err := websocket.Dial(ctx, u.String(), &websocket.DialOptions{HTTPClient: c.client})
 	if err != nil {
@@ -236,4 +260,61 @@ func (c *Connection) openEventsWS(ctx context.Context) error {
 	c.eventsWS = ws
 
 	return nil
+}
+
+func (c *Connection) buildURL(leaf string, query map[string]string) (*url.URL, error) {
+	u, err := url.Parse(c.BaseURL)
+	if err != nil {
+		return u, fmt.Errorf("unable to parse base url %q: %w", c.BaseURL, err)
+	}
+
+	u.Path = "/proxy/network/"
+
+	q := u.Query()
+	for k, v := range query {
+		q.Set(k, v)
+	}
+	u.RawQuery = q.Encode()
+
+	return u.JoinPath(leaf), err
+}
+
+func (c *Connection) apiGet(ctx context.Context, endpoint string) ([]byte, error) {
+	if err := c.checkLogin(ctx); err != nil {
+		return nil, err
+	}
+
+	u, err := c.buildURL(fmt.Sprintf("/api/s/%s/%s", c.Site, endpoint), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating api request: %w", err)
+	}
+
+	req.Header.Set("User-Agent", c.agent)
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Origin", c.BaseURL)
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
+
+	res, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("executing api request: %w", err)
+	}
+
+	d, err := io.ReadAll(res.Body)
+	if err != nil {
+		return d, fmt.Errorf("reading response body on api request (status: %d %s): %w", res.StatusCode, res.Status, err)
+	}
+
+	defer res.Body.Close()
+
+	if res.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("failed to call api (%s): %s", endpoint, string(d))
+	}
+
+	return d, nil
 }

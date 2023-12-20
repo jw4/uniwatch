@@ -58,7 +58,7 @@ func main() {
 
 	errch := make(chan error)
 
-	if err := cn.Events(ctx, NewHandler(self, NewPublisher(nc)), errch); err != nil {
+	if err := cn.Events(ctx, EventHandler(self, NewPublisher(nc)), errch); err != nil {
 		logger.ErrorContext(ctx, "listening to events", "unifi url", os.Getenv("UNIFI_ENDPOINT"), "msg", err)
 		os.Exit(-1)
 	}
@@ -86,7 +86,7 @@ func NewPublisher(nc *nats.Conn) func(context.Context, string, []byte) error {
 	}
 }
 
-func NewHandler(baseSubject string, publisher func(context.Context, string, []byte) error) func(context.Context, websocket.MessageType, io.Reader) error {
+func EventHandler(baseSubject string, publisher func(context.Context, string, []byte) error) func(context.Context, websocket.MessageType, io.Reader) error {
 	return func(ctx context.Context, t websocket.MessageType, rdr io.Reader) error {
 		d, err := io.ReadAll(rdr)
 		if err != nil {
@@ -114,22 +114,16 @@ func NewHandler(baseSubject string, publisher func(context.Context, string, []by
 		subj := fmt.Sprintf("%s.%s", baseSubject, parts[0])
 		switch msg {
 		case "client:sync":
+		case "critical-notifications:sync":
 		case "device:sync":
-			fallthrough
 		case "device:update":
-			mac, ok := meta["mac"].(string)
-			if !ok {
-				logger.WarnContext(ctx, "no mac key", "from", meta)
-				return nil
-			}
-			subj = fmt.Sprintf("%s.%s", subj, mac)
 		case "events":
 		case "session-metadata:sync":
+		case "speed-test:update":
 		case "unifi-device:sync":
 		case "user:sync":
 		default:
 			logger.WarnContext(ctx, "missing handler", "subject", msg)
-			return nil
 		}
 
 		dt, ok := m["data"]
@@ -158,3 +152,8 @@ func NewHandler(baseSubject string, publisher func(context.Context, string, []by
 		return nil
 	}
 }
+
+func AllClientsHandler(ctx context.Context, msg string) error    { return nil }
+func ActiveClientsHandler(ctx context.Context, msg string) error { return nil }
+func ActiveDevices(ctx context.Context, msg string) error        { return nil }
+func LatestEvents(ctx context.Context, msg string) error         { return nil }
