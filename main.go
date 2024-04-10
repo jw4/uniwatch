@@ -93,42 +93,59 @@ func EventHandler(baseSubject string, publisher func(context.Context, string, []
 			return fmt.Errorf("reading from rdr: %w", err)
 		}
 
-		var m map[string]any
-		if err := json.Unmarshal(d, &m); err != nil {
+		var message map[string]any
+		if err := json.Unmarshal(d, &message); err != nil {
 			return fmt.Errorf("unmarshaling message: %w", err)
 		}
 
-		meta, ok := m["meta"].(map[string]any)
+		meta, ok := message["meta"].(map[string]any)
 		if !ok {
-			logger.WarnContext(ctx, "no meta key", "from", m)
+			logger.WarnContext(ctx, "no meta key", "from", message)
 			return nil
 		}
 
-		msg, ok := meta["message"].(string)
+		key, ok := meta["message"].(string)
 		if !ok {
 			logger.WarnContext(ctx, "no message key", "from", meta)
 			return nil
 		}
 
-		parts := strings.Split(msg, ":")
+		parts := strings.Split(key, ":")
 		subj := fmt.Sprintf("%s.%s", baseSubject, parts[0])
-		switch msg {
+		switch key {
 		case "client:sync":
+			logger.InfoContext(ctx, "client sync", "message", message)
 		case "critical-notifications:sync":
+			logger.InfoContext(ctx, "critical notifications sync", "message", message)
 		case "device:sync":
+			logger.InfoContext(ctx, "device sync", "message", message)
 		case "device:update":
+			logger.InfoContext(ctx, "device update", "message", message)
 		case "events":
+			logger.InfoContext(ctx, "events", "message", message)
+		case "networkconf:delete":
+			logger.InfoContext(ctx, "network configuration delete", "message", message)
+		case "radio-ai:plan":
+			logger.InfoContext(ctx, "radio ai plan", "message", message)
 		case "session-metadata:sync":
+			logger.InfoContext(ctx, "session metadata sync", "message", message)
+		case "setting:sync":
+			logger.InfoContext(ctx, "setting sync", "message", message)
 		case "speed-test:update":
+			logger.InfoContext(ctx, "speed test", "message", message)
 		case "unifi-device:sync":
+			logger.InfoContext(ctx, "unifi device sync", "message", message)
 		case "user:sync":
+			logger.InfoContext(ctx, "user sync", "message", message)
+		case "wlanconf:delete":
+			logger.InfoContext(ctx, "wlan configuration delete", "message", message)
 		default:
-			logger.WarnContext(ctx, "missing handler", "subject", msg)
+			logger.WarnContext(ctx, "missing handler", "subject", key)
 		}
 
-		dt, ok := m["data"]
+		dt, ok := message["data"]
 		if !ok {
-			logger.WarnContext(ctx, "no data key", "from", m)
+			logger.WarnContext(ctx, "no data key", "from", message)
 			return nil
 		}
 
