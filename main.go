@@ -114,11 +114,11 @@ func EventHandler(baseSubject string, publisher func(context.Context, string, []
 		subj := fmt.Sprintf("%s.%s", baseSubject, parts[0])
 		switch key {
 		case "client:sync":
-			logger.InfoContext(ctx, "client sync", "message", message)
+			logger.DebugContext(ctx, "client sync", "message", message)
 		case "critical-notifications:sync":
 			logger.InfoContext(ctx, "critical notifications sync", "message", message)
 		case "device:sync":
-			logger.InfoContext(ctx, "device sync", "message", message)
+			logger.DebugContext(ctx, "device sync", "message", message)
 		case "device:update":
 			logger.InfoContext(ctx, "device update", "message", message)
 		case "events":
@@ -134,7 +134,7 @@ func EventHandler(baseSubject string, publisher func(context.Context, string, []
 		case "speed-test:update":
 			logger.InfoContext(ctx, "speed test", "message", message)
 		case "unifi-device:sync":
-			logger.InfoContext(ctx, "unifi device sync", "message", message)
+			logger.DebugContext(ctx, "unifi device sync", "message", message)
 		case "user:sync":
 			logger.InfoContext(ctx, "user sync", "message", message)
 		case "wlanconf:delete":
