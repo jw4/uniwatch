@@ -122,7 +122,7 @@ func EventHandler(baseSubject string, publisher func(context.Context, string, []
 		case "device:update":
 			logger.DebugContext(ctx, "device update", "message", message)
 		case "events":
-			logger.InfoContext(ctx, "events", "message", message)
+			logger.DebugContext(ctx, "events", "message", message)
 		case "networkconf:delete":
 			logger.InfoContext(ctx, "network configuration delete", "message", message)
 		case "radio-ai:plan":
