@@ -120,7 +120,7 @@ func EventHandler(baseSubject string, publisher func(context.Context, string, []
 		case "device:sync":
 			logger.DebugContext(ctx, "device sync", "message", message)
 		case "device:update":
-			logger.InfoContext(ctx, "device update", "message", message)
+			logger.DebugContext(ctx, "device update", "message", message)
 		case "events":
 			logger.InfoContext(ctx, "events", "message", message)
 		case "networkconf:delete":
